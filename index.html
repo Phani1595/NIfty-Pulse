@@ -490,7 +490,8 @@ input:checked+.sl:before{transform:translateX(17px);background:var(--green)}
   </div>
 
   <button class="conn-btn" onclick="connectApi()">Connect and Go Live</button>
-  <div style="margin-top:9px;font-size:11px;color:var(--text3);text-align:center">Stored only on your device. Never shared.</div>
+  <div id="savedStatus" style="margin-top:9px;padding:8px 12px;background:var(--green2);border:1px solid rgba(0,224,170,.2);border-radius:8px;font-size:11px;color:var(--green);text-align:center;display:none">Credentials saved! Auto-connects every time you open the app.</div>
+  <div style="margin-top:7px;font-size:11px;color:var(--text3);text-align:center">All 4 credentials saved on your device. App auto-connects on every open.</div>
 </div>
 
 <script>
@@ -850,8 +851,15 @@ function getExpiries(count){
 
 // Authenticate with Angel One SmartAPI
 async function aoLogin(){
-  var key=AO_KEY,client=AO_CLIENT,pin=document.getElementById('fPin').value.trim(),totp=document.getElementById('fTotp').value.trim();
-  if(!key||!client||!pin){return{success:false,msg:'Missing API Key, Client ID or PIN'};}
+  var key=AO_KEY,client=AO_CLIENT;
+  var pin=document.getElementById('fPin').value.trim()||'';
+  var totp=document.getElementById('fTotp').value.trim()||'';
+  // If form is empty, try loading from saved storage
+  try{
+    if(!pin) pin=localStorage.getItem('ao_pin')||'';
+    if(!totp) totp=localStorage.getItem('ao_totp')||'';
+  }catch(e){}
+  if(!key||!client||!pin){return{success:false,msg:'Missing credentials. Please tap Connect and enter all details.'};}
   // Generate TOTP from secret key
   var totpCode='';
   if(totp&&totp.length>6){
@@ -990,9 +998,15 @@ function updateOptionsExpiry(){
 
 async function connectApi(){
   var k=document.getElementById('fKey').value.trim(),id=document.getElementById('fId').value.trim();
+  var pin=document.getElementById('fPin').value.trim(),totp=document.getElementById('fTotp').value.trim();
   if(!k||!id){alert('Please enter API Key and Client ID.');return;}
   AO_KEY=k;AO_CLIENT=id;
-  try{localStorage.setItem('ao_key',k);localStorage.setItem('ao_id',id);}catch(e){}
+  try{
+    localStorage.setItem('ao_key',k);
+    localStorage.setItem('ao_id',id);
+    if(pin) localStorage.setItem('ao_pin',pin);
+    if(totp) localStorage.setItem('ao_totp',totp);
+  }catch(e){}
   // Show connecting state
   document.getElementById('liveStatus').textContent='...';
   showBanner('Connecting...','Authenticating with Angel One SmartAPI',true,50);
@@ -1000,8 +1014,9 @@ async function connectApi(){
   if(result.success){
     LIVE_MODE=true;
     document.getElementById('liveStatus').textContent='LIVE';
-    closeApi();
-    showBanner('LIVE CONNECTED','Real NSE/BSE prices now active!',true,100);
+    try{var ss=document.getElementById('savedStatus');if(ss)ss.style.display='block';}catch(e){}
+    setTimeout(function(){closeApi();},1500);
+    showBanner('LIVE CONNECTED','Real NSE/BSE prices now active! Auto-saves for next time.',true,100);
     // Start live price updates
     fetchLiveIndexPrices();
     setInterval(fetchLiveIndexPrices,5000);
@@ -1020,11 +1035,19 @@ function startTicks(){if(tickTimer)clearInterval(tickTimer);tickTimer=setInterva
 try{
   var sk=localStorage.getItem('ao_key');
   if(sk){
+    // Restore ALL saved credentials into form fields
     document.getElementById('fKey').value=sk;
     document.getElementById('fId').value=localStorage.getItem('ao_id')||'';
-    AO_KEY=sk;AO_CLIENT=localStorage.getItem('ao_id')||'';
-    // Auto-reconnect if credentials exist
-    document.getElementById('liveStatus').textContent='Reconnecting...';
+    try{
+      var savedPin=localStorage.getItem('ao_pin')||'';
+      var savedTotp=localStorage.getItem('ao_totp')||'';
+      if(savedPin) document.getElementById('fPin').value=savedPin;
+      if(savedTotp) document.getElementById('fTotp').value=savedTotp;
+    }catch(e){}
+    AO_KEY=sk;
+    AO_CLIENT=localStorage.getItem('ao_id')||'';
+    // Silent auto-reconnect — no prompt needed
+    document.getElementById('liveStatus').textContent='Connecting...';
     aoLogin().then(function(result){
       if(result.success){
         LIVE_MODE=true;
@@ -1033,6 +1056,13 @@ try{
         setInterval(fetchLiveIndexPrices,5000);
         renderExpiryDates();
         updateOptionsExpiry();
+        // Set up daily re-auth (Angel One token expires every 24h)
+        setInterval(function(){
+          aoLogin().then(function(r){
+            if(r.success){LIVE_MODE=true;document.getElementById('liveStatus').textContent='LIVE';}
+            else{LIVE_MODE=false;document.getElementById('liveStatus').textContent='DEMO';}
+          });
+        }, 6*60*60*1000); // Re-auth every 6 hours
       } else {
         document.getElementById('liveStatus').textContent='DEMO';
       }
